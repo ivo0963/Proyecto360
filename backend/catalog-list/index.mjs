@@ -1,10 +1,16 @@
 // GET /catalog — scope catalog.read (cualquier rol autenticado)
-import { getAuth, json, requireScope } from '../shared/auth.mjs';
-import { catalog } from '../shared/data.mjs';
+import { authenticate, json, requireScope } from '../shared/auth.mjs';
+import { data } from '../shared/data.mjs';
 
 export const handler = async (event) => {
-  const auth = getAuth(event);
+  const { auth, error } = await authenticate(event);
+  if (error) return error;
   const denied = requireScope(auth, 'catalog.read');
   if (denied) return denied;
-  return json(200, catalog);
+  try {
+    return json(200, await data.listCatalog());
+  } catch (err) {
+    console.error(err);
+    return json(500, { error: 'Error al leer el catálogo' });
+  }
 };
