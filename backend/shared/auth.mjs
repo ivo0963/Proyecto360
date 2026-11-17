@@ -1,26 +1,42 @@
-// Helpers compartidos. API Gateway (HTTP API + JWT Authorizer) YA validó firma,
-// issuer, audience y exp: aquí solo se leen claims y se aplican reglas de negocio.
+// Autenticación y autorización del BFF.
+// 1) authenticate(): valida el JWT de Entra ID (firma, issuer, audience, exp)
+//    con shared/jwt.mjs. Si falla → 401. (API Gateway también lo valida: doble capa.)
+// 2) requireScope()/requireRole(): reglas de negocio con scp y roles → 403.
+import { AuthError, bearerFrom, verifyToken } from './jwt.mjs';
 
-// En HTTP API los claims que en el JWT son ARRAY (roles) llegan achatados a
-// string (p.ej. "[Admin Operador]"); scp llega como "orders.read orders.write".
-// Este split cubre espacio, coma y corchetes. Ante dudas:
-//   console.log(JSON.stringify(event.requestContext.authorizer))
-const split = (v) => String(v ?? '').split(/[\s,\[\]"]+/).filter(Boolean);
-
-export function getAuth(event) {
-  const claims = event.requestContext?.authorizer?.jwt?.claims ?? {};
-  return {
-    sub: claims.oid ?? claims.sub ?? 'unknown',
-    roles: split(claims.roles),
-    scopes: split(claims.scp),
-  };
-}
+const toList = (v) =>
+  Array.isArray(v) ? v.map(String) : String(v ?? '').split(/\s+/).filter(Boolean);
 
 export const json = (statusCode, body) => ({
   statusCode,
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
+
+/**
+ * Devuelve { auth } si el token es válido, o { error } con la respuesta 401/500.
+ */
+export async function authenticate(event) {
+  const token = bearerFrom(event);
+  if (!token) return { error: json(401, { error: 'Falta el header Authorization: Bearer <token>' }) };
+  try {
+    const claims = await verifyToken(token);
+    return {
+      auth: {
+        sub: claims.oid ?? claims.sub,
+        name: claims.name ?? claims.preferred_username ?? null,
+        roles: toList(claims.roles),
+        scopes: toList(claims.scp),
+      },
+    };
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return { error: json(401, { error: 'Token inválido', detalle: err.message }) };
+    }
+    console.error(err);
+    return { error: json(500, { error: 'Error interno al validar el token' }) };
+  }
+}
 
 // Devuelve una respuesta 403 si falta el scope, o null si todo OK.
 export function requireScope(auth, scope) {

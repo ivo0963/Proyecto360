@@ -1,24 +1,40 @@
 // PUT /catalog/{id} — scope catalog.write Y rol Admin
-import { getAuth, json, requireRole, requireScope } from '../shared/auth.mjs';
-import { catalog } from '../shared/data.mjs';
+import { authenticate, json, requireRole, requireScope } from '../shared/auth.mjs';
+import { data } from '../shared/data.mjs';
 
 export const handler = async (event) => {
-  const auth = getAuth(event);
+  const { auth, error } = await authenticate(event);
+  if (error) return error;
   const denied = requireScope(auth, 'catalog.write') ?? requireRole(auth, 'Admin');
   if (denied) return denied;
 
-  const product = catalog.find((p) => p.id === event.pathParameters?.id);
-  if (!product) return json(404, { error: 'Producto no encontrado' });
-
-  let changes;
+  let body;
   try {
-    changes = JSON.parse(event.body ?? '{}');
+    body = JSON.parse(event.body ?? '{}');
   } catch {
     return json(400, { error: 'JSON inválido' });
   }
-  if (changes.name !== undefined) product.name = String(changes.name);
-  if (Number.isFinite(changes.price) && changes.price >= 0) product.price = changes.price;
-  if (Number.isInteger(changes.stock) && changes.stock >= 0) product.stock = changes.stock;
 
-  return json(200, product);
+  const changes = {};
+  if (body.name !== undefined) {
+    if (typeof body.name !== 'string' || !body.name.trim()) return json(400, { error: 'name inválido' });
+    changes.name = body.name.trim();
+  }
+  if (body.price !== undefined) {
+    if (!Number.isFinite(body.price) || body.price < 0) return json(400, { error: 'price debe ser número >= 0' });
+    changes.price = body.price;
+  }
+  if (body.stock !== undefined) {
+    if (!Number.isInteger(body.stock) || body.stock < 0) return json(400, { error: 'stock debe ser entero >= 0' });
+    changes.stock = body.stock;
+  }
+
+  try {
+    const product = await data.updateProduct(event.pathParameters?.id, changes);
+    if (!product) return json(404, { error: 'Producto no encontrado' });
+    return json(200, product);
+  } catch (err) {
+    console.error(err);
+    return json(500, { error: 'Error al actualizar el producto' });
+  }
 };
